@@ -1,0 +1,526 @@
+---
+title: "Covid"
+author: "Pinyu Chen, Yaning Wu"
+date: "12/1/2021"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+## Import data
+```{r}
+library(tidyverse)
+OCD <- read_csv("../data/owid-covid-data.csv")
+head(OCD)
+
+INCOME <- read_csv("../data/Metadata_Country_API_4_DS2_en_csv_v2_3160069.csv")
+colnames(INCOME) <- c("Country_Code", "Region", "IncomeGroup")
+glimpse(INCOME)
+```
+## Check the number of NA
+```{r}
+OCD %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(cols = c(`iso_code`:`excess_mortality_cumulative_per_million`),
+               names_to = "colnames", 
+               values_to = "value_NA") %>%
+  arrange(desc(value_NA)) %>%
+  filter(value_NA > 60000)
+```
+
+## Select relative columns and deleted rows which population is NA
+```{r}
+OCD %>%
+  select(iso_code, continent,location,date,total_cases,total_deaths,population,population_density,median_age,gdp_per_capita,diabetes_prevalence,human_development_index) -> OCD1
+
+glimpse(OCD1)
+
+OCD1 %>% 
+  filter(!is.na(population))->OCD1
+
+OCD1 %>%
+  mutate(iso_code = parse_factor(iso_code),
+         continent = parse_factor(continent),
+         location = parse_factor(location)) -> OCD2
+glimpse(OCD2)
+
+nlevels(OCD2$location)
+```
+
+## Filter out the NA from INCOME data set
+```{r}
+INCOME %>%
+  select(Country_Code, IncomeGroup) %>%
+  filter(!is.na(IncomeGroup)) %>%
+  mutate(IncomeGroup = str_replace_all(IncomeGroup, "\\s", "_"),
+         IncomeGroup = parse_factor(IncomeGroup),
+         Country_Code = parse_factor(Country_Code))-> INCOME1
+glimpse(INCOME1)
+
+levels(INCOME1$IncomeGroup)
+```
+
+## Combine INCOME data set to OCD data set
+```{r}
+OCD2 %>%
+  left_join(INCOME1, by = c("iso_code" = "Country_Code")) %>%
+  filter(!is.na(IncomeGroup))-> OCD3
+OCD3
+```
+
+## Create proportion of total cases and deaths for each country
+```{r}
+OCD3 %>%
+  group_by(iso_code, continent, location) %>%
+  filter(date == max(date)) %>%
+  filter(date != "2021-12-01") # this check the location that do not have 2021-12-01's record
+
+OCD3 %>% 
+  filter(date==max(date))->OCD4 #OCD4 is the table that only 2021-12-01 per country
+
+OCD4 %>% 
+  mutate(cases_per_person = total_cases/population,
+         deaths_per_person = total_deaths/population) %>% 
+  filter((!is.na(cases_per_person)) & (!is.na(deaths_per_person)))->OCD4  # This step is for removing proportion which has na
+
+OCD4 %>% 
+  slice_sample(n=30)
+
+OCD4 %>%
+  filter(across(everything(), ~ !is.na(.x))) -> Test.OCD4
+```
+
+## Adjust level of IncomeGroup
+```{r}
+OCD4 %>%
+  mutate(IncomeGroup = fct_relevel(IncomeGroup, "Low_income", after = nlevels(IncomeGroup)),
+         IncomeGroup = fct_relevel(IncomeGroup, "Lower_middle_income", after = 2L)) -> OCD4
+```
+
+## Mean cases/deaths per person vs date
+```{r}
+OCD3 %>% 
+  mutate(cases_per_person = total_cases/population,
+         deaths_per_person = total_deaths/population) %>% 
+  filter((!is.na(cases_per_person)) & (!is.na(deaths_per_person))) -> test.OCD3
+
+test.OCD3 %>%
+  group_by(date, IncomeGroup) %>%
+  summarise(mean_pro_cases = mean(cases_per_person),
+            mean_pro_deaths = mean(deaths_per_person)) %>%
+  mutate(IncomeGroup = fct_relevel(IncomeGroup, "Low_income", after = nlevels(IncomeGroup)),
+         IncomeGroup = fct_relevel(IncomeGroup, "Lower_middle_income", after = 2L)) -> INCOME_CASES_DEATHS.pro
+
+ggplot(INCOME_CASES_DEATHS.pro, aes(date, mean_pro_cases, color = IncomeGroup)) +
+  geom_line() +
+  theme_bw() +
+  ggtitle("Mean of cases per person")
+ggplot(INCOME_CASES_DEATHS.pro, aes(date, mean_pro_deaths, color = IncomeGroup)) +
+  geom_line() +
+  theme_bw() +
+  ggtitle("Mean deaths per person")
+```
+
+## Total cases/deaths vs date
+```{r}
+OCD3 %>%
+  filter(!is.na(total_cases) & !is.na(total_deaths)) %>%
+  group_by(date, IncomeGroup) %>%
+  summarise(total_casesI = mean(total_cases),
+            total_deathsI = mean(total_deaths)) %>%
+  mutate(IncomeGroup = fct_relevel(IncomeGroup, "Low_income", after = nlevels(IncomeGroup)),
+         IncomeGroup = fct_relevel(IncomeGroup, "Lower_middle_income", after = 2L))-> INCOME_CASES_DEATHS
+  
+
+ggplot(INCOME_CASES_DEATHS, aes(date, total_casesI, color = IncomeGroup)) +
+  geom_line() +
+  theme_bw() +
+  ggtitle("Total cases vs date")
+ggplot(INCOME_CASES_DEATHS, aes(date, total_deathsI, color = IncomeGroup)) +
+  geom_line() +
+  theme_bw() +
+  ggtitle("Total deaths vs date")
+```
+
+## Location Taiwan 
+```{r}
+OCD %>%
+  group_by(location, date) %>%
+  summarise(total_new_cases = sum(new_cases)) -> OCD6
+OCD6 %>%
+  filter(location == "Taiwan") %>%
+  ggplot(aes(x = date, y = total_new_cases)) +
+  geom_point()
+```
+
+12. 
+```{r}
+OCD6 %>%
+  group_by(location) %>%
+  filter(!is.na(total_new_cases)) %>%
+  summarise(total_new_cases = sum(total_new_cases)) %>%
+  filter(location != "World" & location != "Asia" & location != "Europe" & location != "North America" & location != "North America" & location != "United States" & location != "European Union" & location != "South America") %>%
+  filter(total_new_cases == max(total_new_cases) | total_new_cases == min(total_new_cases))
+```
+
+## GDP vs total cases/deaths
+```{r}
+OCD4 %>%
+  ggplot(aes(x = gdp_per_capita, y = total_cases, color = IncomeGroup))+
+  geom_point() +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_smooth(method = "lm", se = F) +
+  theme_bw() +
+  ggtitle("Total cases vs Catita GDP")
+  
+OCD4 %>%
+  ggplot(aes(x = gdp_per_capita, y = total_deaths, color = IncomeGroup))+
+  geom_point() +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_smooth(method = "lm", se = F) +
+  theme_bw() +
+  ggtitle("Total deaths vs Catita GDP")
+```
+
+## Boxplots of IncomeGroup vs cases/deaths per person
+```{r}
+OCD4 %>%
+  ggplot(aes(x = IncomeGroup, 
+             y = cases_per_person,
+             )) +
+  geom_boxplot(aes(fill = IncomeGroup),outlier.shape = 17, outlier.size = 3) +
+  theme_bw() +
+  xlab("IncomeGroup") +
+  ylab("cases_per_person") +
+ scale_y_log10() 
+
+OCD4 %>%
+  ggplot(aes(x = IncomeGroup, 
+             y = deaths_per_person,
+             )) +
+  geom_boxplot(aes(fill = IncomeGroup),outlier.shape = 17, outlier.size = 3) +
+  theme_bw() +
+  xlab("IncomeGroup") +
+  ylab("deaths_per_person") +
+ scale_y_log10()
+```
+## Map
+```{r}
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(lwgeom)
+library(geos)
+library(ggspatial)
+library(sf)
+
+theme_set(
+  theme_void()
+  )
+
+world4<- ne_countries(scale = "medium", returnclass = "sf")
+world4
+full_join(world4,OCD4,by = c("adm0_a3" = "iso_code"))->newworld
+class(newworld)
+
+capitals2 <- read_csv("../data/country_capitals_long_lat.csv")
+
+sites2 <- st_as_sf(capitals2, 
+                  coords = c("Longitude", "Latitude"),
+                  crs = 4326, agr = "constant")
+
+newworld %>%
+  filter(!is.na(IncomeGroup)) %>%
+  group_by(IncomeGroup) %>%
+  slice_max(cases_per_person, n = 2) %>%
+  ungroup() %>%
+  select(location, IncomeGroup, cases_per_person)-> Max5newworldc
+
+capitals2 %>%
+  filter(Country == "Seychelles" | Country == "Andorra" | Country == "Montenegro" | Country == "Georgia" | Country == "Mongolia" | Country == "Palestine" | Country == "Rwanda" | Country == "Mozambique") -> Max5capitals2c
+
+sites2 %>%
+  filter(Country == "Seychelles" | Country == "Andorra" | Country == "Montenegro" | Country == "Georgia" | Country == "Mongolia" | Country == "Palestine" | Country == "Rwanda" | Country == "Mozambique") -> Max5sites2c
+
+ggplot(data = newworld) +
+    geom_sf(aes(fill = cases_per_person)) +
+    scale_fill_viridis_c(option = "plasma") +
+    geom_sf(data = Max5sites2c, size = 2, shape = 23) +
+    geom_text(data = Max5capitals2c, aes(x = Longitude, y = Latitude, label = Country), 
+    size = 4, col = "dark blue", fontface = "bold") +
+  scale_fill_continuous(low = "white", high = "blue", 
+                        name = "Cases per person", label = scales::comma)
+```
+```{r}
+newworld %>%
+  filter(!is.na(IncomeGroup)) %>%
+  group_by(IncomeGroup) %>%
+  slice_max(deaths_per_person, n = 2) %>%
+  ungroup() %>%
+  select(location, IncomeGroup, deaths_per_person)-> Max5newworldd
+
+capitals2 %>%
+  filter(Country == "Hungary" | Country == "Czechia" | Country == "Peru" | Country == "Bulgaria" | Country == "Tunisia" | Country == "Ukraine" | Country == "Afghanistan" | Country == "Syria") -> Max5capitals2d
+
+sites2 %>%
+  filter(Country == "Hungary" | Country == "Czechia" | Country == "Peru" | Country == "Bulgaria" | Country == "Tunisia" | Country == "Ukraine" | Country == "Afghanistan" | Country == "Syria") -> Max5sites2d
+
+ggplot(data = newworld) +
+    geom_sf(aes(fill = deaths_per_person)) +
+    scale_fill_viridis_c(option = "plasma") +
+    geom_sf(data = Max5sites2d, size = 2, shape = 23) +
+    geom_text(data = Max5capitals2d, aes(x = Longitude, y = Latitude, label = Country), 
+    size = 4, col = "brown", fontface = "bold") +
+  scale_fill_continuous(low = "white", high = "red", 
+                        name = "Deaths per person", label = scales::comma)
+```
+
+
+## Histogram of cases/deaths per person
+```{r}
+ggplot(data = OCD4,aes(x = log(cases_per_person))) +
+  geom_histogram()
+
+ggplot(data = OCD4,aes(x = log(deaths_per_person))) +
+  geom_histogram()
+
+ggplot(data = OCD4,aes(x = cases_per_person)) +
+  geom_histogram()+
+  theme_classic()
+
+ggplot(data = OCD4,aes(x = deaths_per_person)) +
+  geom_histogram()+
+  theme_classic()
+```
+
+## HDI vs cases / deaths per person
+```{r}
+OCD4 %>%
+  filter(location != "China" & location != "Vanuatu")
+
+
+ggplot(data = OCD4, aes(y = cases_per_person, x = human_development_index, color = IncomeGroup)) +
+  geom_point() +
+  geom_smooth(method = "lm", formula = y~ x,se=FALSE) +
+  theme_bw()+
+  ggtitle("human_development_index vs cases_per_person")
+
+ggplot(data = OCD4, aes(y = deaths_per_person, x = human_development_index, color = IncomeGroup)) +
+  geom_point() +
+  geom_smooth(method = "lm", formula = y~ x,se=FALSE) +
+  theme_bw()+
+  ggtitle("Human Development Index vs Deaths per person")
+```
+## Population vs cases / deaths per person
+```{r}
+OCD4 %>%
+  filter(location != "China" & location != "India" & location != "United States") %>%
+ggplot(aes(y = (cases_per_person), x = (population), color = IncomeGroup)) +
+  geom_point() +
+  geom_smooth(method = "lm",se=FALSE)
+
+OCD4 %>%
+  filter(location != "China" & location != "India" & location != "United States") %>%
+ggplot(aes(y = (deaths_per_person), x = (population), color = IncomeGroup)) +
+  geom_point() +
+  geom_smooth(method = "lm",se=FALSE)
+
+OCD4 %>%
+  group_by(IncomeGroup) %>%
+  slice_max(population)
+```
+
+## Median age vs cases / deaths per person
+```{r}
+OCD4 %>% 
+filter(location!="China") %>% 
+  ggplot(aes(y = cases_per_person, x = median_age, color = IncomeGroup)) +
+  geom_point() +
+  geom_smooth(method = "lm",se=FALSE)+
+  scale_y_log10()+
+  theme_bw()
+
+OCD4 %>% 
+filter(location!="China") %>% 
+  ggplot(aes(y = deaths_per_person, x = median_age, color = IncomeGroup)) +
+  geom_point() +
+  geom_smooth(method = "lm",se=FALSE)+
+  scale_y_log10()+
+  theme_bw()
+```
+
+## Population density vs cases / deaths per person
+```{r}
+ggplot(data = OCD4,aes(y = (cases_per_person), x = (population_density), color = IncomeGroup)) +
+  geom_point() +
+  geom_smooth(method = "lm")+
+  scale_x_log10()+
+  theme_bw()
+
+ggplot(data = OCD4,aes(y = (deaths_per_person), x = population_density, color = IncomeGroup)) +
+  geom_point() +
+  geom_smooth(method = "lm")+
+  scale_x_log10()+
+  theme_bw()
+```
+
+## Diabetes vs cases / deaths per person
+```{r}
+OCD4 %>%
+  filter(location != "Mauritius" & location != "Saudi Arabia") %>%
+ggplot(aes(y = (cases_per_person), x = diabetes_prevalence, color = IncomeGroup)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+
+OCD4 %>%
+  filter(location != "Mauritius" & location != "Saudi Arabia") %>%
+ggplot(aes(y = (deaths_per_person), x = diabetes_prevalence, color = IncomeGroup)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+
+OCD4 %>%
+  #filter(location != "Mauritius" & location != "Saudi Arabia") %>%
+ggplot(aes(y = (cases_per_person), x = diabetes_prevalence, color = IncomeGroup)) +
+  geom_point() +
+  geom_smooth(method = "lm")+
+  scale_y_log10()+
+  theme_bw()
+
+OCD4 %>%
+  #filter(location != "Mauritius" & location != "Saudi Arabia") %>%
+ggplot(aes(y = (deaths_per_person), x = diabetes_prevalence, color = IncomeGroup)) +
+  geom_point() +
+  geom_smooth(method = "lm")+
+  scale_y_log10()+
+  theme_bw()
+```
+
+## Fit the model
+```{r}
+OCD4.lm1 <- lm(log(cases_per_person) ~ human_development_index + IncomeGroup + log(gdp_per_capita) + median_age +log(population_density), data = Test.OCD4)
+
+OCD4.lm2 <- lm(log(deaths_per_person) ~ human_development_index + IncomeGroup + log(gdp_per_capita) + median_age +log(population_density), data = Test.OCD4)
+
+summary(OCD4.lm1)
+summary(OCD4.lm2)
+```
+
+## Check the constance
+```{r}
+par(mfrow=c(3,2))
+
+plot(Test.OCD4$median_age, OCD4.lm1$residuals)
+abline(0, 0, lty=2)
+
+plot(log(Test.OCD4$gdp_per_capita),OCD4.lm1$residuals)
+abline(0, 0, lty=2)
+
+plot(log(Test.OCD4$population_density), OCD4.lm1$residuals)
+abline(0, 0, lty=2)
+
+plot(Test.OCD4$human_development_index, OCD4.lm1$residuals)
+abline(0, 0, lty=2)
+
+plot(Test.OCD4$IncomeGroup, OCD4.lm1$residuals)
+abline(0, 0, lty=2)
+
+par(mfrow=c(3,2))
+plot(Test.OCD4$median_age, OCD4.lm2$residuals)
+abline(0, 0, lty=2)
+
+plot(log(Test.OCD4$gdp_per_capita),OCD4.lm2$residuals)
+abline(0, 0, lty=2)
+
+plot(log(Test.OCD4$population_density), OCD4.lm2$residuals)
+abline(0, 0, lty=2)
+
+plot(Test.OCD4$human_development_index, OCD4.lm2$residuals)
+abline(0, 0, lty=2)
+
+plot(Test.OCD4$IncomeGroup, OCD4.lm2$residuals)
+abline(0, 0, lty=2)
+```
+## Check normality of residual
+```{r}
+hist(OCD4.lm1$resi)
+hist(OCD4.lm2$resi)
+```
+
+## Stepwise
+```{r}
+library(olsrr)
+OCD4.lm1.step <- ols_step_both_aic(OCD4.lm1)
+OCD4.lm1.step
+```
+
+```{r}
+OCD4.lm2.step <- ols_step_both_aic(OCD4.lm2)
+OCD4.lm2.step
+```
+
+
+## Final model
+```{r}
+Final.model1 <- lm(log(cases_per_person) ~ human_development_index + IncomeGroup, data = Test.OCD4)
+summary(Final.model1)
+```
+
+```{r}
+Final.model2 <- lm(log(deaths_per_person) ~ human_development_index + IncomeGroup + log(gdp_per_capita), data = Test.OCD4)
+summary(Final.model2)
+```
+
+## Check the normality of the variable
+```{r}
+ggplot(data = Final.model1, aes(x = Final.model1$fitted.values, y = Final.model1$residuals, color = IncomeGroup)) +
+  geom_point() +
+  geom_hline(yintercept=0,linetype="dashed") +
+  ggtitle("Model residuals vs model fitted values (Cases)")
+
+qqnorm(Final.model1$resi)
+qqline(Final.model1$resi)
+shapiro.test(Final.model1$resi)
+```
+## Diagnostics
+```{r}
+#Cases
+ggplot(data = Final.model1, aes(x = Final.model1$fitted.values, y = Final.model1$residuals, color = IncomeGroup)) +
+  geom_point() +
+  geom_hline(yintercept=0,linetype="dashed") +
+  ggtitle("Model residuals vs model fitted values (Cases)")
+
+qqnorm(Final.model1$resi)
+qqline(Final.model1$resi)
+shapiro.test(Final.model1$resi)
+
+# Deaths
+ggplot(data = Final.model2, aes(x = Final.model2$fitted.values, y = Final.model2$residuals, color = IncomeGroup)) +
+  geom_point() +
+  geom_hline(yintercept=0,linetype="dashed") +
+  ggtitle("Model residuals vs model fitted values (Deaths)")
+
+qqnorm(Final.model2$resi)
+qqline(Final.model2$resi)
+shapiro.test(Final.model2$resi)
+```
+## Residuals vs preorder Resisual
+```{r}
+ggplot(data = Test.OCD4, aes(x = lag(Final.model1$residuals), y = Final.model1$residuals)) +
+  geom_point() +
+  geom_hline(yintercept=0,linetype="dashed") +
+  ggtitle("Residuals vs preorder Residual (Cases)")
+
+ggplot(data = Test.OCD4, aes(x = lag(Final.model2$residuals), y = Final.model2$residuals)) +
+  geom_point() +
+  geom_hline(yintercept=0,linetype="dashed") +
+  ggtitle("Residuals vs preorder Residual (Deaths)")
+```
+
+## Check multicollinearity
+```{r}
+library(car)
+vif(Final.model1)
+vif(Final.model2)
+```
+
+
